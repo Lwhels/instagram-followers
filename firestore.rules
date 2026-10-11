@@ -2,27 +2,96 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Each user only has access to their own data tree
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}
+    // Document ID: userId (matches auth.uid)
+    // Fields:
+    //   - None or profile fields
+    //
+    // Collection: /users/{userId}/snapshots/{snapshotId}
+    // Document ID: snapshotId (e.g. snap_1234567890)
+    // Fields:
+    //   - id: string (required) - Snapshot ID
+    //   - name: string (required, 1-120 chars) - Human-readable snapshot name
+    //   - created_at: string (required, ISO 8601) - Creation timestamp
+    //   - follower_count: int (required, >= 0) - Total followers count
+    //   - following_count: int (required, >= 0) - Total following count
+    //
+    // Collection: /users/{userId}/snapshots/{snapshotId}/buckets/{bucketId}
+    // Document ID: bucketId (e.g. bucket_0, bucket_1)
+    // Fields:
+    //   - accounts: list (required) - Bucketed account objects (max 500 per bucket)
+    //
+    // Collection: /users/{userId}/settings/decisions
+    // Document ID: decisions
+    // Fields:
+    //   - [username]: map - Decision object containing decision, tags, notes, updated_at
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidSnapshot() {
+      return request.resource.data.keys().hasAll(['id', 'name', 'created_at', 'follower_count', 'following_count'])
+        && request.resource.data.id is string
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 120
+        && request.resource.data.follower_count is int
+        && request.resource.data.follower_count >= 0
+        && request.resource.data.following_count is int
+        && request.resource.data.following_count >= 0;
+    }
+
+    function isValidBucket() {
+      return request.resource.data.keys().hasAll(['accounts'])
+        && request.resource.data.accounts is list
+        && request.resource.data.accounts.size() <= 500;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // Multi-tenant user root
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if isOwner(userId);
 
-      // User snapshots subcollection
+      // Snapshots collection
       match /snapshots/{snapshotId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidSnapshot();
+        allow update: if isOwner(userId) && isValidSnapshot();
+        allow delete: if isOwner(userId);
 
-        // Bucketed account lists
+        // Bucketed account chunks (Document Bucketing Pattern)
         match /buckets/{bucketId} {
-          allow read, write: if request.auth != null && request.auth.uid == userId;
+          allow read: if isOwner(userId);
+          allow create, update: if isOwner(userId) && isValidBucket();
+          allow delete: if isOwner(userId);
         }
       }
 
       // User custom swipe decisions and settings
       match /settings/{settingDoc} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if isOwner(userId);
       }
     }
 
-    // Deny all other access by default
+    // Default deny all other paths
     match /{document=**} {
       allow read, write: if false;
     }

@@ -39,7 +39,7 @@ def suggest_tags(username: str) -> List[str]:
 
 
 class FollowerEngine:
-    def __init__(self, db: Optional[Database] = None, db_path: str = "follower_vault.db"):
+    def __init__(self, db: Optional[Database] = None, db_path: Optional[str] = None):
         self.db = db or Database(db_path=db_path)
 
     def load_sample_demo(self, snapshot_name: str = "Interactive Demo Snapshot", user_id: int = 1) -> int:

@@ -19,8 +19,11 @@ from instagram_analyzer.parser import ParsedEntry
 
 
 class Database:
-    def __init__(self, db_path: str = "follower_vault.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        raw_path = db_path or os.getenv("DATABASE_PATH", os.getenv("DATABASE_URL", "follower_vault.db"))
+        if raw_path.startswith("sqlite:///"):
+            raw_path = raw_path.replace("sqlite:///", "")
+        self.db_path = raw_path
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:

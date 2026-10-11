@@ -52,7 +52,7 @@ from instagram_analyzer.upload_framework import (
 )
 
 
-def create_app(db_path: str = "follower_vault.db", upload_dir: str = "uploads_staging") -> FastAPI:
+def create_app(db_path: Optional[str] = None, upload_dir: Optional[str] = None) -> FastAPI:
     app = FastAPI(
         title="Instagram Follower Analyzer & Vault",
         description="Multi-tenant follower relationship auditor with interactive swipe triage, authentication, and async upload pipeline",
@@ -67,8 +67,11 @@ def create_app(db_path: str = "follower_vault.db", upload_dir: str = "uploads_st
         allow_headers=["*"],
     )
 
-    engine = FollowerEngine(db_path=db_path)
-    storage = UploadStorage(base_dir=upload_dir)
+    resolved_db_path = db_path or os.getenv("DATABASE_PATH", os.getenv("DATABASE_URL", "follower_vault.db"))
+    resolved_upload_dir = upload_dir or os.getenv("UPLOAD_DIR", "uploads_staging")
+
+    engine = FollowerEngine(db_path=resolved_db_path)
+    storage = UploadStorage(base_dir=resolved_upload_dir)
 
     # Auth Dependency
     def get_current_user(credentials=Depends(security_bearer)) -> dict:

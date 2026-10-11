@@ -1,9 +1,10 @@
-"""SQLite database storage engine for Instagram Follower Analyzer."""
+"""SQLite database storage engine for Instagram Follower Analyzer with multi-tenancy support."""
 
 import json
 import sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+
 from instagram_analyzer.models import (
     AuditMetrics,
     DecisionType,
@@ -11,6 +12,8 @@ from instagram_analyzer.models import (
     InstagramAccount,
     RelationshipType,
     SnapshotMeta,
+    UploadJobResponse,
+    UploadJobStatus,
 )
 from instagram_analyzer.parser import ParsedEntry
 
@@ -27,27 +30,82 @@ class Database:
         conn.execute("PRAGMA foreign_keys=ON;")
         return conn
 
+    def _migrate_existing_tables(self, conn: sqlite3.Connection):
+        """Perform non-destructive schema migrations for existing databases."""
+        tables_to_check = {
+            "snapshots": "user_id INTEGER NOT NULL DEFAULT 1",
+            "snapshot_relations": "user_id INTEGER NOT NULL DEFAULT 1",
+            "user_decisions": "user_id INTEGER NOT NULL DEFAULT 1",
+            "decision_history": "user_id INTEGER NOT NULL DEFAULT 1",
+        }
+        for table, col_def in tables_to_check.items():
+            # Check if table exists
+            table_exists = conn.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()[0]
+            if table_exists:
+                columns = [
+                    row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                ]
+                col_name = col_def.split()[0]
+                if col_name not in columns:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+
     def _init_db(self):
         with self._get_connection() as conn:
+            # 1. First create tables that may not exist
             conn.executescript("""
+                CREATE TABLE IF NOT EXISTS app_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    display_name TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS upload_jobs (
+                    id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    filename TEXT NOT NULL,
+                    file_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    total_items INTEGER DEFAULT 0,
+                    processed_items INTEGER DEFAULT 0,
+                    progress_percent REAL DEFAULT 0.0,
+                    snapshot_id INTEGER,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS snapshots (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL DEFAULT 1,
                     name TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     follower_count INTEGER DEFAULT 0,
-                    following_count INTEGER DEFAULT 0
+                    following_count INTEGER DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
                 );
 
-                CREATE TABLE IF NOT EXISTS users (
-                    username TEXT PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS user_accounts (
+                    user_id INTEGER NOT NULL DEFAULT 1,
+                    username TEXT NOT NULL,
                     display_name TEXT,
                     profile_url TEXT NOT NULL,
                     first_seen TEXT NOT NULL,
-                    last_seen TEXT NOT NULL
+                    last_seen TEXT NOT NULL,
+                    PRIMARY KEY (user_id, username),
+                    FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
                 );
 
                 CREATE TABLE IF NOT EXISTS snapshot_relations (
                     snapshot_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL DEFAULT 1,
                     username TEXT NOT NULL,
                     is_follower INTEGER NOT NULL DEFAULT 0,
                     is_following INTEGER NOT NULL DEFAULT 0,
@@ -55,39 +113,199 @@ class Database:
                     relationship TEXT NOT NULL,
                     PRIMARY KEY (snapshot_id, username),
                     FOREIGN KEY (snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE,
-                    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+                    FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
                 );
 
                 CREATE TABLE IF NOT EXISTS user_decisions (
-                    username TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL DEFAULT 1,
+                    username TEXT NOT NULL,
                     decision TEXT NOT NULL DEFAULT 'unreviewed',
                     tags TEXT DEFAULT '[]',
                     notes TEXT,
                     updated_at TEXT NOT NULL,
-                    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+                    PRIMARY KEY (user_id, username),
+                    FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
                 );
 
                 CREATE TABLE IF NOT EXISTS decision_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL DEFAULT 1,
                     username TEXT NOT NULL,
                     previous_decision TEXT,
                     new_decision TEXT NOT NULL,
-                    timestamp TEXT NOT NULL
+                    timestamp TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
                 );
-
-                CREATE INDEX IF NOT EXISTS idx_relations_snapshot ON snapshot_relations(snapshot_id);
-                CREATE INDEX IF NOT EXISTS idx_relations_rel ON snapshot_relations(relationship);
-                CREATE INDEX IF NOT EXISTS idx_decisions_dec ON user_decisions(decision);
             """)
 
+            # 2. Check and migrate columns if database was created with an earlier version
+            self._migrate_existing_tables(conn)
+
+            # 3. Create indices safely
+            conn.executescript("""
+                CREATE INDEX IF NOT EXISTS idx_snapshots_user ON snapshots(user_id);
+                CREATE INDEX IF NOT EXISTS idx_relations_snapshot ON snapshot_relations(snapshot_id);
+                CREATE INDEX IF NOT EXISTS idx_relations_user ON snapshot_relations(user_id);
+                CREATE INDEX IF NOT EXISTS idx_decisions_user_dec ON user_decisions(user_id, decision);
+                CREATE INDEX IF NOT EXISTS idx_jobs_user ON upload_jobs(user_id);
+            """)
+
+            # Ensure default demo user exists for backwards compatibility
+            now = datetime.utcnow().isoformat()
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO app_users (id, email, password_hash, display_name, created_at, updated_at)
+                VALUES (1, 'demo@followervault.local', '$2b$12$e8F5Yq.VqVqVqVqVqVqVq.fakehashforbackwardcompat', 'Demo User', ?, ?)
+                """,
+                (now, now),
+            )
+            conn.commit()
+
+    # -------------------------------------------------------------
+    # User Authentication Management
+    # -------------------------------------------------------------
+    def create_user(self, email: str, password_hash: str, display_name: Optional[str] = None) -> int:
+        now = datetime.utcnow().isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO app_users (email, password_hash, display_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (email.strip().lower(), password_hash, display_name or email.split("@")[0], now, now),
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_user_by_email(self, email: str) -> Optional[dict]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM app_users WHERE email = ?",
+                (email.strip().lower(),),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: int) -> Optional[dict]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM app_users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    # -------------------------------------------------------------
+    # Upload Job Management
+    # -------------------------------------------------------------
+    def create_upload_job(self, job_id: str, user_id: int, filename: str, file_type: str) -> None:
+        now = datetime.utcnow().isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO upload_jobs (id, user_id, filename, file_type, status, stage, progress_percent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 0.0, ?)
+                """,
+                (job_id, user_id, filename, file_type, UploadJobStatus.PENDING.value, "queued", now),
+            )
+            conn.commit()
+
+    def update_upload_job(
+        self,
+        job_id: str,
+        status: Optional[UploadJobStatus] = None,
+        stage: Optional[str] = None,
+        progress: Optional[float] = None,
+        total_items: Optional[int] = None,
+        processed_items: Optional[int] = None,
+    ) -> None:
+        updates = []
+        params = []
+        if status:
+            updates.append("status = ?")
+            params.append(status.value)
+        if stage:
+            updates.append("stage = ?")
+            params.append(stage)
+        if progress is not None:
+            updates.append("progress_percent = ?")
+            params.append(progress)
+        if total_items is not None:
+            updates.append("total_items = ?")
+            params.append(total_items)
+        if processed_items is not None:
+            updates.append("processed_items = ?")
+            params.append(processed_items)
+
+        if not updates:
+            return
+
+        params.append(job_id)
+        sql = f"UPDATE upload_jobs SET {', '.join(updates)} WHERE id = ?"
+        with self._get_connection() as conn:
+            conn.execute(sql, params)
+            conn.commit()
+
+    def complete_upload_job(self, job_id: str, snapshot_id: int) -> None:
+        now = datetime.utcnow().isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE upload_jobs
+                SET status = ?, stage = 'completed', progress_percent = 100.0, snapshot_id = ?, completed_at = ?
+                WHERE id = ?
+                """,
+                (UploadJobStatus.COMPLETED.value, snapshot_id, now, job_id),
+            )
+            conn.commit()
+
+    def fail_upload_job(self, job_id: str, error_message: str) -> None:
+        now = datetime.utcnow().isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE upload_jobs
+                SET status = ?, stage = 'failed', error_message = ?, completed_at = ?
+                WHERE id = ?
+                """,
+                (UploadJobStatus.FAILED.value, error_message, now, job_id),
+            )
+            conn.commit()
+
+    def get_upload_job(self, job_id: str, user_id: int) -> Optional[UploadJobResponse]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM upload_jobs WHERE id = ? AND user_id = ?",
+                (job_id, user_id),
+            ).fetchone()
+            if not row:
+                return None
+            return UploadJobResponse(
+                job_id=row["id"],
+                user_id=row["user_id"],
+                filename=row["filename"],
+                file_type=row["file_type"],
+                status=UploadJobStatus(row["status"]),
+                stage=row["stage"],
+                total_items=row["total_items"],
+                processed_items=row["processed_items"],
+                progress_percent=row["progress_percent"],
+                snapshot_id=row["snapshot_id"],
+                error_message=row["error_message"],
+                created_at=row["created_at"],
+                completed_at=row["completed_at"],
+            )
+
+    # -------------------------------------------------------------
+    # Snapshots & Follower Relational Logic (Scoped to user_id)
+    # -------------------------------------------------------------
     def save_snapshot(
         self,
         name: str,
         followers: List[ParsedEntry],
         following: List[ParsedEntry],
+        user_id: int = 1,
         timestamp: Optional[str] = None,
     ) -> int:
-        """Create a new snapshot and compute relationships."""
         now = timestamp or datetime.utcnow().isoformat()
         follower_map = {f.username: f for f in followers}
         following_map = {f.username: f for f in following}
@@ -97,10 +315,10 @@ class Database:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO snapshots (name, created_at, follower_count, following_count)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO snapshots (user_id, name, created_at, follower_count, following_count)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (name, now, len(followers), len(following)),
+                (user_id, name, now, len(followers), len(following)),
             )
             snapshot_id = cursor.lastrowid
 
@@ -108,22 +326,22 @@ class Database:
                 entry = following_map.get(uname) or follower_map.get(uname)
                 cursor.execute(
                     """
-                    INSERT INTO users (username, display_name, profile_url, first_seen, last_seen)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(username) DO UPDATE SET
+                    INSERT INTO user_accounts (user_id, username, display_name, profile_url, first_seen, last_seen)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, username) DO UPDATE SET
                         profile_url = excluded.profile_url,
                         last_seen = excluded.last_seen
                     """,
-                    (uname, None, entry.profile_url, now, now),
+                    (user_id, uname, None, entry.profile_url, now, now),
                 )
 
-                # Ensure user_decisions entry exists
+                # Ensure user_decisions entry exists for this user_id
                 cursor.execute(
                     """
-                    INSERT OR IGNORE INTO user_decisions (username, decision, tags, notes, updated_at)
-                    VALUES (?, 'unreviewed', '[]', NULL, ?)
+                    INSERT OR IGNORE INTO user_decisions (user_id, username, decision, tags, notes, updated_at)
+                    VALUES (?, ?, 'unreviewed', '[]', NULL, ?)
                     """,
-                    (uname, now),
+                    (user_id, uname, now),
                 )
 
                 is_follower = 1 if uname in follower_map else 0
@@ -138,29 +356,33 @@ class Database:
                 else:
                     rel = RelationshipType.NEITHER.value
 
-                followed_at = None
-                if entry and entry.timestamp_str:
-                    followed_at = entry.timestamp_str
+                followed_at = entry.timestamp_str if entry else None
 
                 cursor.execute(
                     """
-                    INSERT INTO snapshot_relations (snapshot_id, username, is_follower, is_following, followed_at, relationship)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO snapshot_relations (snapshot_id, user_id, username, is_follower, is_following, followed_at, relationship)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (snapshot_id, uname, is_follower, is_following, followed_at, rel),
+                    (snapshot_id, user_id, uname, is_follower, is_following, followed_at, rel),
                 )
 
             conn.commit()
             return snapshot_id
 
-    def get_latest_snapshot_id(self) -> Optional[int]:
+    def get_latest_snapshot_id(self, user_id: int = 1) -> Optional[int]:
         with self._get_connection() as conn:
-            row = conn.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+            row = conn.execute(
+                "SELECT id FROM snapshots WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
             return row["id"] if row else None
 
-    def list_snapshots(self) -> List[SnapshotMeta]:
+    def list_snapshots(self, user_id: int = 1) -> List[SnapshotMeta]:
         with self._get_connection() as conn:
-            rows = conn.execute("SELECT * FROM snapshots ORDER BY id DESC").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM snapshots WHERE user_id = ? ORDER BY id DESC",
+                (user_id,),
+            ).fetchall()
             return [
                 SnapshotMeta(
                     id=r["id"],
@@ -176,18 +398,18 @@ class Database:
         self,
         username: str,
         decision: DecisionType,
+        user_id: int = 1,
         tags: Optional[List[str]] = None,
         notes: Optional[str] = None,
     ) -> None:
-        """Mutate a user's decision in the database and record history for undo."""
         now = datetime.utcnow().isoformat()
         clean_uname = username.strip().lstrip("@").lower()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
             existing = cursor.execute(
-                "SELECT decision, tags, notes FROM user_decisions WHERE username = ?",
-                (clean_uname,),
+                "SELECT decision, tags, notes FROM user_decisions WHERE user_id = ? AND username = ?",
+                (user_id, clean_uname),
             ).fetchone()
 
             prev_decision = existing["decision"] if existing else "unreviewed"
@@ -195,32 +417,32 @@ class Database:
 
             cursor.execute(
                 """
-                INSERT INTO user_decisions (username, decision, tags, notes, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(username) DO UPDATE SET
+                INSERT INTO user_decisions (user_id, username, decision, tags, notes, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, username) DO UPDATE SET
                     decision = excluded.decision,
                     tags = excluded.tags,
                     notes = coalesce(excluded.notes, user_decisions.notes),
                     updated_at = excluded.updated_at
                 """,
-                (clean_uname, decision.value, tags_json, notes, now),
+                (user_id, clean_uname, decision.value, tags_json, notes, now),
             )
 
             cursor.execute(
                 """
-                INSERT INTO decision_history (username, previous_decision, new_decision, timestamp)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO decision_history (user_id, username, previous_decision, new_decision, timestamp)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (clean_uname, prev_decision, decision.value, now),
+                (user_id, clean_uname, prev_decision, decision.value, now),
             )
             conn.commit()
 
-    def undo_last_decision(self) -> Optional[Dict[str, str]]:
-        """Undo the most recent decision and restore previous state."""
+    def undo_last_decision(self, user_id: int = 1) -> Optional[Dict[str, str]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             last = cursor.execute(
-                "SELECT * FROM decision_history ORDER BY id DESC LIMIT 1"
+                "SELECT * FROM decision_history WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+                (user_id,),
             ).fetchone()
             if not last:
                 return None
@@ -233,22 +455,24 @@ class Database:
                 """
                 UPDATE user_decisions
                 SET decision = ?, updated_at = ?
-                WHERE username = ?
+                WHERE user_id = ? AND username = ?
                 """,
-                (prev_decision, now, username),
+                (prev_decision, now, user_id, username),
             )
             cursor.execute("DELETE FROM decision_history WHERE id = ?", (last["id"],))
             conn.commit()
             return {"username": username, "restored_decision": prev_decision}
 
-    def compute_metrics(self, snapshot_id: Optional[int] = None) -> AuditMetrics:
-        """Recompute current audit metrics for the specified snapshot."""
-        sid = snapshot_id or self.get_latest_snapshot_id()
+    def compute_metrics(self, snapshot_id: Optional[int] = None, user_id: int = 1) -> AuditMetrics:
+        sid = snapshot_id or self.get_latest_snapshot_id(user_id=user_id)
         if not sid:
             return AuditMetrics()
 
         with self._get_connection() as conn:
-            snap = conn.execute("SELECT * FROM snapshots WHERE id = ?", (sid,)).fetchone()
+            snap = conn.execute(
+                "SELECT * FROM snapshots WHERE id = ? AND user_id = ?",
+                (sid, user_id),
+            ).fetchone()
             if not snap:
                 return AuditMetrics()
 
@@ -257,10 +481,10 @@ class Database:
                     sr.relationship,
                     coalesce(ud.decision, 'unreviewed') as decision
                 FROM snapshot_relations sr
-                LEFT JOIN user_decisions ud ON sr.username = ud.username
-                WHERE sr.snapshot_id = ?
+                LEFT JOIN user_decisions ud ON sr.username = ud.username AND ud.user_id = ?
+                WHERE sr.snapshot_id = ? AND sr.user_id = ?
             """
-            rows = conn.execute(query, (sid,)).fetchall()
+            rows = conn.execute(query, (user_id, sid, user_id)).fetchall()
 
             total_followers = snap["follower_count"]
             total_following = snap["following_count"]
@@ -292,7 +516,7 @@ class Database:
                         unfollowed_count += 1
                     elif dec == DecisionType.VIP.value:
                         vip_count += 1
-                    else:  # unreviewed
+                    else:
                         actionable_unreciprocated += 1
 
             reciprocity = (mutual_count / total_following * 100.0) if total_following > 0 else 0.0
@@ -315,19 +539,19 @@ class Database:
     def get_accounts(
         self,
         snapshot_id: Optional[int] = None,
+        user_id: int = 1,
         relationship: Optional[RelationshipType] = None,
         decision: Optional[DecisionType] = None,
         search: Optional[str] = None,
         limit: int = 500,
         offset: int = 0,
     ) -> List[InstagramAccount]:
-        """Fetch accounts matching criteria."""
-        sid = snapshot_id or self.get_latest_snapshot_id()
+        sid = snapshot_id or self.get_latest_snapshot_id(user_id=user_id)
         if not sid:
             return []
 
-        conditions = ["sr.snapshot_id = ?"]
-        params = [sid]
+        conditions = ["sr.snapshot_id = ?", "sr.user_id = ?"]
+        params = [sid, user_id]
 
         if relationship:
             conditions.append("sr.relationship = ?")
@@ -355,8 +579,8 @@ class Database:
                 u.first_seen,
                 u.last_seen
             FROM snapshot_relations sr
-            JOIN users u ON sr.username = u.username
-            LEFT JOIN user_decisions ud ON sr.username = ud.username
+            JOIN user_accounts u ON sr.username = u.username AND u.user_id = sr.user_id
+            LEFT JOIN user_decisions ud ON sr.username = ud.username AND ud.user_id = sr.user_id
             WHERE {where_clause}
             ORDER BY
                 CASE coalesce(ud.decision, 'unreviewed')
@@ -399,10 +623,10 @@ class Database:
     def get_swipe_deck(
         self,
         snapshot_id: Optional[int] = None,
+        user_id: int = 1,
         limit: int = 50,
     ) -> List[InstagramAccount]:
-        """Fetch candidate accounts for swipe UI (unreciprocated and unreviewed)."""
-        sid = snapshot_id or self.get_latest_snapshot_id()
+        sid = snapshot_id or self.get_latest_snapshot_id(user_id=user_id)
         if not sid:
             return []
 
@@ -419,16 +643,17 @@ class Database:
                 u.first_seen,
                 u.last_seen
             FROM snapshot_relations sr
-            JOIN users u ON sr.username = u.username
-            LEFT JOIN user_decisions ud ON sr.username = ud.username
+            JOIN user_accounts u ON sr.username = u.username AND u.user_id = sr.user_id
+            LEFT JOIN user_decisions ud ON sr.username = ud.username AND ud.user_id = sr.user_id
             WHERE sr.snapshot_id = ?
+              AND sr.user_id = ?
               AND sr.relationship = 'unreciprocated'
               AND coalesce(ud.decision, 'unreviewed') = 'unreviewed'
             ORDER BY sr.followed_at ASC, sr.username ASC
             LIMIT ?
         """
         with self._get_connection() as conn:
-            rows = conn.execute(sql, (sid, limit)).fetchall()
+            rows = conn.execute(sql, (sid, user_id, limit)).fetchall()
             deck = []
             for r in rows:
                 tags = []
@@ -452,27 +677,30 @@ class Database:
                 )
             return deck
 
-    def diff_snapshots(self, snapshot_a_id: int, snapshot_b_id: int) -> DiffResult:
-        """Compare two snapshots to find follower dynamics."""
+    def diff_snapshots(self, snapshot_a_id: int, snapshot_b_id: int, user_id: int = 1) -> DiffResult:
         with self._get_connection() as conn:
-            snap_a = conn.execute("SELECT * FROM snapshots WHERE id = ?", (snapshot_a_id,)).fetchone()
-            snap_b = conn.execute("SELECT * FROM snapshots WHERE id = ?", (snapshot_b_id,)).fetchone()
+            snap_a = conn.execute(
+                "SELECT * FROM snapshots WHERE id = ? AND user_id = ?",
+                (snapshot_a_id, user_id),
+            ).fetchone()
+            snap_b = conn.execute(
+                "SELECT * FROM snapshots WHERE id = ? AND user_id = ?",
+                (snapshot_b_id, user_id),
+            ).fetchone()
 
             if not snap_a or not snap_b:
-                raise ValueError("One or both snapshot IDs not found")
+                raise ValueError("One or both snapshot IDs not found for this user")
 
-            # Snapshot A
             rows_a = conn.execute(
-                "SELECT username, is_follower, is_following FROM snapshot_relations WHERE snapshot_id = ?",
-                (snapshot_a_id,),
+                "SELECT username, is_follower, is_following FROM snapshot_relations WHERE snapshot_id = ? AND user_id = ?",
+                (snapshot_a_id, user_id),
             ).fetchall()
             followers_a = {r["username"] for r in rows_a if r["is_follower"]}
             following_a = {r["username"] for r in rows_a if r["is_following"]}
 
-            # Snapshot B
             rows_b = conn.execute(
-                "SELECT username, is_follower, is_following FROM snapshot_relations WHERE snapshot_id = ?",
-                (snapshot_b_id,),
+                "SELECT username, is_follower, is_following FROM snapshot_relations WHERE snapshot_id = ? AND user_id = ?",
+                (snapshot_b_id, user_id),
             ).fetchall()
             followers_b = {r["username"] for r in rows_b if r["is_follower"]}
             following_b = {r["username"] for r in rows_b if r["is_following"]}

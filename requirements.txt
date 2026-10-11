@@ -4,6 +4,8 @@ uvicorn[standard]>=0.28.0
 beautifulsoup4>=4.12.0
 pydantic>=2.6.0
 python-multipart>=0.0.9
+pyjwt>=2.8.0
+bcrypt>=4.1.0
 
 # macOS Desktop Support (optional on Linux/Docker)
 pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'

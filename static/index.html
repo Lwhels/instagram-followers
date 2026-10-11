@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Instagram Follower Analyzer & Swipe Deck</title>
+  <title>Follower Vault - Multi-Tenant Instagram Follower Auditor</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22><text y=%2226%22 font-size=%2224%22>⚡</text></svg>">
 </head>
@@ -26,7 +26,7 @@
     <div class="brand">
       <div class="brand-icon">⚡</div>
       <div>
-        <h1>Follower Vault <span class="version-badge">v2.0 PRO</span></h1>
+        <h1>Follower Vault <span class="version-badge">v2.1 CLOUD</span></h1>
       </div>
     </div>
 
@@ -40,9 +40,13 @@
       <button class="btn btn-secondary" id="btnOpenUpload">
         📁 Import Export
       </button>
-      <button class="btn btn-primary" id="btnLoadDemo">
-        🎲 Load Demo
-      </button>
+      
+      <!-- User Auth Area -->
+      <div id="authHeaderArea" style="display: flex; align-items: center; gap: 8px;">
+        <button class="btn btn-primary" id="btnOpenAuth">
+          🔑 Sign In
+        </button>
+      </div>
     </div>
   </header>
 
@@ -50,17 +54,17 @@
   <main>
     <!-- Welcome Prompt if empty -->
     <div id="welcomePrompt" style="display: none; background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: var(--radius-md); padding: 24px; text-align: center;">
-      <h2 style="margin-bottom: 8px;">Welcome to Instagram Follower Analyzer & Swipe Deck!</h2>
+      <h2 style="margin-bottom: 8px;">Welcome to Follower Vault!</h2>
       <p style="color: var(--text-muted); max-width: 600px; margin: 0 auto 18px auto; font-size: 0.9rem;">
-        Get total clarity on your Instagram followers with 100% privacy (no passwords needed).
+        Get total clarity on your Instagram followers with 100% privacy and user isolation.
         Triage unreciprocated following with a fast Tinder-like swipe deck, whitelist celebrities & brands, and track unfollows over time.
       </p>
-      <div style="display: flex; gap: 12px; justify-content: center;">
-        <button class="btn btn-primary" onclick="document.getElementById('btnLoadDemo').click()">
-          🚀 Explore with Interactive Demo Data
+      <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+        <button class="btn btn-primary" id="btnDemoBanner">
+          ⚡ Explore with Instant Demo Account
         </button>
         <button class="btn btn-secondary" onclick="document.getElementById('btnOpenUpload').click()">
-          📁 Upload Your Own Instagram Export
+          📁 Upload Instagram Export (.zip / .html / .json)
         </button>
       </div>
     </div>
@@ -269,13 +273,13 @@
         </p>
 
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 8px;">
-          <a class="btn btn-secondary" href="/api/export?format=csv" download style="justify-content: center;">
+          <a class="btn btn-secondary" id="btnExportCsv" href="/api/export?format=csv" download style="justify-content: center;">
             📊 Download CSV
           </a>
-          <a class="btn btn-secondary" href="/api/export?format=markdown" download style="justify-content: center;">
+          <a class="btn btn-secondary" id="btnExportMd" href="/api/export?format=markdown" download style="justify-content: center;">
             📝 Download Markdown
           </a>
-          <a class="btn btn-secondary" href="/api/export?format=json" download style="justify-content: center;">
+          <a class="btn btn-secondary" id="btnExportJson" href="/api/export?format=json" download style="justify-content: center;">
             📦 Download JSON
           </a>
         </div>
@@ -289,6 +293,8 @@
       <h3>Import Instagram Export</h3>
       <button class="btn btn-secondary btn-icon-only" id="btnCloseUpload">✕</button>
     </div>
+
+    <!-- Upload Input Form -->
     <form id="uploadForm">
       <div class="dropzone" id="dropzone">
         <div class="dropzone-icon">📁</div>
@@ -304,7 +310,62 @@
 
       <div style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
         <button type="button" class="btn btn-secondary" onclick="document.getElementById('uploadDialog').close()">Cancel</button>
-        <button type="submit" class="btn btn-primary">Process & Audit</button>
+        <button type="submit" class="btn btn-primary" id="btnSubmitUpload">Process & Audit</button>
+      </div>
+    </form>
+
+    <!-- Async Progress Bar -->
+    <div id="uploadProgressScreen" class="progress-container" style="display: none;">
+      <div class="progress-stage-text">
+        <span id="progressStageName">Uploading archive...</span>
+        <span id="progressPercent">0%</span>
+      </div>
+      <div class="progress-bar-track">
+        <div id="progressBarFill" class="progress-bar-fill"></div>
+      </div>
+      <p style="font-size: 0.78rem; color: var(--text-muted); text-align: center; margin-top: 4px;">
+        Processing in background. Large archives with 10k+ followers take ~3-5 seconds.
+      </p>
+    </div>
+  </dialog>
+
+  <!-- User Authentication Modal -->
+  <dialog id="authDialog">
+    <div class="modal-header">
+      <h3 id="authModalTitle">Sign In to Follower Vault</h3>
+      <button class="btn btn-secondary btn-icon-only" id="btnCloseAuth">✕</button>
+    </div>
+
+    <div class="auth-tabs">
+      <button type="button" class="auth-tab-btn active" id="tabAuthLogin">Sign In</button>
+      <button type="button" class="auth-tab-btn" id="tabAuthRegister">Create Account</button>
+    </div>
+
+    <form id="authForm">
+      <div class="form-group" id="groupDisplayName" style="display: none;">
+        <label for="authDisplayName">Display Name</label>
+        <input type="text" id="authDisplayName" placeholder="e.g. Alex Rivers">
+      </div>
+
+      <div class="form-group">
+        <label for="authEmail">Email Address</label>
+        <input type="email" id="authEmail" required placeholder="you@example.com">
+      </div>
+
+      <div class="form-group">
+        <label for="authPassword">Password</label>
+        <input type="password" id="authPassword" required placeholder="••••••••">
+      </div>
+
+      <div id="authErrorMsg" style="display: none; color: var(--accent-rose); font-size: 0.8rem; margin-top: 10px;"></div>
+
+      <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 10px;">
+        <button type="submit" class="btn btn-primary" id="btnAuthSubmit" style="justify-content: center;">
+          Sign In
+        </button>
+        <button type="button" class="btn btn-secondary" id="btnAuthDemoQuick" style="justify-content: center;">
+          ⚡ Or Continue as Demo User
+        </button>
       </div>
     </form>
   </dialog>

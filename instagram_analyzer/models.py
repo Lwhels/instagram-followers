@@ -84,3 +84,39 @@ class DiffResult(BaseModel):
     new_followers: List[InstagramAccount] = Field(default_factory=list)
     unfollowed_by_you: List[InstagramAccount] = Field(default_factory=list)
     new_following: List[InstagramAccount] = Field(default_factory=list)
+
+
+# Authentication & Multi-Tenancy Models
+class UserRegisterRequest(BaseModel):
+    email: str
+    password: str
+    display_name: Optional[str] = None
+
+
+class UserLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class UploadJobStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class UploadJobResponse(BaseModel):
+    job_id: str
+    user_id: int
+    filename: str
+    file_type: str
+    status: UploadJobStatus
+    stage: str
+    total_items: int = 0
+    processed_items: int = 0
+    progress_percent: float = 0.0
+    snapshot_id: Optional[int] = None
+    error_message: Optional[str] = None
+    created_at: str
+    completed_at: Optional[str] = None
+

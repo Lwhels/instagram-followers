@@ -1,4 +1,4 @@
-"""High-level analysis engine and business logic for Instagram Follower Analyzer."""
+"""High-level analysis engine and business logic for Instagram Follower Analyzer with multi-tenancy."""
 
 import csv
 import io
@@ -17,7 +17,6 @@ from instagram_analyzer.parser import ParsedEntry, parse_file, parse_zip_archive
 from instagram_analyzer.sample_data import generate_sample_dataset
 
 
-# Common brand and celebrity keywords for smart tagging
 BRAND_KEYWORDS = {
     "official", "news", "mag", "times", "daily", "club", "co", "lab", "hq",
     "studio", "press", "media", "f1", "nba", "apple", "google", "nike", "patagonia"
@@ -43,20 +42,24 @@ class FollowerEngine:
     def __init__(self, db: Optional[Database] = None, db_path: str = "follower_vault.db"):
         self.db = db or Database(db_path=db_path)
 
-    def load_sample_demo(self, snapshot_name: str = "Interactive Demo Snapshot") -> int:
-        """Seed database with realistic demo dataset."""
+    def load_sample_demo(self, snapshot_name: str = "Interactive Demo Snapshot", user_id: int = 1) -> int:
+        """Seed database with realistic demo dataset scoped to a user."""
         followers, following = generate_sample_dataset()
-        snap_id = self.db.save_snapshot(name=snapshot_name, followers=followers, following=following)
+        snap_id = self.db.save_snapshot(
+            name=snapshot_name,
+            followers=followers,
+            following=following,
+            user_id=user_id,
+        )
 
-        # Pre-seed suggestions for some popular accounts
-        accounts = self.db.get_accounts(snapshot_id=snap_id, limit=500)
+        accounts = self.db.get_accounts(snapshot_id=snap_id, user_id=user_id, limit=500)
         for acc in accounts:
             tags = suggest_tags(acc.username)
             if tags:
-                # Store suggested tags without auto-whitelisting
                 self.db.record_decision(
                     username=acc.username,
                     decision=acc.decision,
+                    user_id=user_id,
                     tags=tags,
                 )
         return snap_id
@@ -67,6 +70,7 @@ class FollowerEngine:
         followers_file: Optional[str] = None,
         following_file: Optional[str] = None,
         zip_file: Optional[str] = None,
+        user_id: int = 1,
     ) -> int:
         """Parse uploaded or local files and store snapshot in database."""
         if zip_file:
@@ -80,59 +84,78 @@ class FollowerEngine:
         if not followers and not following:
             raise ValueError("No follower or following records could be extracted from files")
 
-        snap_id = self.db.save_snapshot(name=snapshot_name, followers=followers, following=following)
+        snap_id = self.db.save_snapshot(
+            name=snapshot_name,
+            followers=followers,
+            following=following,
+            user_id=user_id,
+        )
 
-        # Populate auto-suggested tags
-        accounts = self.db.get_accounts(snapshot_id=snap_id, limit=1000)
+        accounts = self.db.get_accounts(snapshot_id=snap_id, user_id=user_id, limit=1000)
         for acc in accounts:
             tags = suggest_tags(acc.username)
             if tags:
-                self.db.record_decision(username=acc.username, decision=acc.decision, tags=tags)
+                self.db.record_decision(
+                    username=acc.username,
+                    decision=acc.decision,
+                    user_id=user_id,
+                    tags=tags,
+                )
 
         return snap_id
 
-    def recompute(self, snapshot_id: Optional[int] = None) -> AuditMetrics:
-        """Recalculate metrics for current snapshot."""
-        return self.db.compute_metrics(snapshot_id=snapshot_id)
+    def recompute(self, snapshot_id: Optional[int] = None, user_id: int = 1) -> AuditMetrics:
+        """Recalculate metrics for current snapshot scoped to user."""
+        return self.db.compute_metrics(snapshot_id=snapshot_id, user_id=user_id)
 
     def swipe(
         self,
         username: str,
         decision: DecisionType,
+        user_id: int = 1,
         tags: Optional[List[str]] = None,
         notes: Optional[str] = None,
     ) -> AuditMetrics:
         """Apply a swipe decision and immediately recompute metrics."""
-        self.db.record_decision(username=username, decision=decision, tags=tags, notes=notes)
-        return self.recompute()
+        self.db.record_decision(
+            username=username,
+            decision=decision,
+            user_id=user_id,
+            tags=tags,
+            notes=notes,
+        )
+        return self.recompute(user_id=user_id)
 
-    def undo(self) -> Tuple[Optional[Dict[str, str]], AuditMetrics]:
+    def undo(self, user_id: int = 1) -> Tuple[Optional[Dict[str, str]], AuditMetrics]:
         """Undo last swipe decision and recompute."""
-        restored = self.db.undo_last_decision()
-        metrics = self.recompute()
+        restored = self.db.undo_last_decision(user_id=user_id)
+        metrics = self.recompute(user_id=user_id)
         return restored, metrics
 
     def batch_decide(
         self,
         usernames: List[str],
         decision: DecisionType,
+        user_id: int = 1,
         tags: Optional[List[str]] = None,
     ) -> AuditMetrics:
         """Apply decision to multiple accounts at once."""
         for u in usernames:
-            self.db.record_decision(username=u, decision=decision, tags=tags)
-        return self.recompute()
+            self.db.record_decision(username=u, decision=decision, user_id=user_id, tags=tags)
+        return self.recompute(user_id=user_id)
 
     def export_data(
         self,
         format_type: str = "csv",
         snapshot_id: Optional[int] = None,
+        user_id: int = 1,
         relationship: Optional[RelationshipType] = None,
         decision: Optional[DecisionType] = None,
     ) -> str:
         """Export accounts into CSV, JSON, or Markdown checklist."""
         accounts = self.db.get_accounts(
             snapshot_id=snapshot_id,
+            user_id=user_id,
             relationship=relationship,
             decision=decision,
             limit=50000,

@@ -1,5 +1,38 @@
+# Instagram exports and private data
 *.html
 *.txt
-.DS_Store
+*.zip
+*.json
+!fixtures/*.json
+!fixtures/*.html
+
+# Python & environments
 __pycache__/
+*.py[cod]
+*$py.class
 .venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Node / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*

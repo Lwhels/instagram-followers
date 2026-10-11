@@ -1,6 +1,7 @@
 # Instagram exports and private data
 *.html
 *.txt
+!requirements.txt
 *.zip
 *.json
 !fixtures/*.json

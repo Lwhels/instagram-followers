@@ -1,0 +1,15 @@
+# Production Dependencies
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+beautifulsoup4>=4.12.0
+pydantic>=2.6.0
+python-multipart>=0.0.9
+
+# macOS Desktop Support (optional on Linux/Docker)
+pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'
+pyobjc-framework-WebKit>=10.0; sys_platform == 'darwin'
+
+# Testing & Dev
+pytest>=8.0.0
+pytest-cov>=4.1.0
+httpx>=0.27.0

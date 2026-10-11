@@ -76,3 +76,8 @@ def test_demo_load_and_metrics(client):
     res_exp = client.get("/api/export?format=csv")
     assert res_exp.status_code == 200
     assert "text/csv" in res_exp.headers["content-type"]
+
+    # Index page
+    res_html = client.get("/")
+    assert res_html.status_code == 200
+    assert "Follower Vault" in res_html.text

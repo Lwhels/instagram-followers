@@ -6,6 +6,7 @@
 *.json
 !fixtures/*.json
 !fixtures/*.html
+!static/*.html
 
 # Python & environments
 __pycache__/

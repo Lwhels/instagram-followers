@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Instagram Follower Analyzer & Swipe Deck</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22><text y=%2226%22 font-size=%2224%22>⚡</text></svg>">
+</head>
+<body>
+
+  <!-- SVG Gradient definition for gauge -->
+  <svg style="position: absolute; width: 0; height: 0; overflow: hidden;" aria-hidden="true">
+    <defs>
+      <linearGradient id="gaugeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#f09433" />
+        <stop offset="35%" stop-color="#dc2743" />
+        <stop offset="70%" stop-color="#cc2366" />
+        <stop offset="100%" stop-color="#8b5cf6" />
+      </linearGradient>
+    </defs>
+  </svg>
+
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">⚡</div>
+      <div>
+        <h1>Follower Vault <span class="version-badge">v2.0 PRO</span></h1>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <button class="btn btn-secondary btn-icon-only" id="btnToggleSound" title="Toggle Sound Effects">
+        🔊 Sound
+      </button>
+      <button class="btn btn-secondary" id="btnRecompute" title="Recalculate metrics based on current decisions">
+        🔄 Recompute
+      </button>
+      <button class="btn btn-secondary" id="btnOpenUpload">
+        📁 Import Export
+      </button>
+      <button class="btn btn-primary" id="btnLoadDemo">
+        🎲 Load Demo
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main>
+    <!-- Welcome Prompt if empty -->
+    <div id="welcomePrompt" style="display: none; background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: var(--radius-md); padding: 24px; text-align: center;">
+      <h2 style="margin-bottom: 8px;">Welcome to Instagram Follower Analyzer & Swipe Deck!</h2>
+      <p style="color: var(--text-muted); max-width: 600px; margin: 0 auto 18px auto; font-size: 0.9rem;">
+        Get total clarity on your Instagram followers with 100% privacy (no passwords needed).
+        Triage unreciprocated following with a fast Tinder-like swipe deck, whitelist celebrities & brands, and track unfollows over time.
+      </p>
+      <div style="display: flex; gap: 12px; justify-content: center;">
+        <button class="btn btn-primary" onclick="document.getElementById('btnLoadDemo').click()">
+          🚀 Explore with Interactive Demo Data
+        </button>
+        <button class="btn btn-secondary" onclick="document.getElementById('btnOpenUpload').click()">
+          📁 Upload Your Own Instagram Export
+        </button>
+      </div>
+    </div>
+
+    <!-- Stats & KPI Banner -->
+    <section class="stats-banner">
+      <!-- Reciprocity Health Meter -->
+      <div class="reciprocity-gauge-card">
+        <svg class="gauge-svg" viewBox="0 0 100 100">
+          <circle class="gauge-bg" cx="50" cy="50" r="45"></circle>
+          <circle id="gaugeFill" class="gauge-fill" cx="50" cy="50" r="45" stroke-dasharray="283" stroke-dashoffset="140"></circle>
+        </svg>
+        <div id="gaugeVal" class="gauge-value">0%</div>
+        <div class="gauge-label">Reciprocity Rate</div>
+      </div>
+
+      <!-- Metric KPI Items -->
+      <div class="metrics-grid">
+        <div class="metric-item accent-mutual">
+          <div id="kpiMutuals" class="metric-number">0</div>
+          <div class="metric-title">Mutual Friends</div>
+        </div>
+        <div class="metric-item accent-unreciprocated">
+          <div id="kpiActionable" class="metric-number">0</div>
+          <div class="metric-title">Unreciprocated (Actionable)</div>
+        </div>
+        <div class="metric-item accent-whitelisted">
+          <div id="kpiWhitelisted" class="metric-number">0</div>
+          <div class="metric-title">Whitelisted (Safe)</div>
+        </div>
+        <div class="metric-item accent-fans">
+          <div id="kpiFans" class="metric-number">0</div>
+          <div class="metric-title">Fans (Follow You)</div>
+        </div>
+        <div class="metric-item">
+          <div id="kpiTotalFollowing" class="metric-number">0</div>
+          <div class="metric-title">Total Following</div>
+        </div>
+        <div class="metric-item">
+          <div id="kpiTotalFollowers" class="metric-number">0</div>
+          <div class="metric-title">Total Followers</div>
+        </div>
+        <div class="metric-item">
+          <div id="kpiRawUnreciprocated" class="metric-number">0</div>
+          <div class="metric-title">Raw Non-Followers</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Navigation Tabs -->
+    <nav class="tabs-nav">
+      <button class="tab-btn active" data-tab="swipe">
+        🎴 Swipe Deck <span id="deckBadge" class="badge-pill">0</span>
+      </button>
+      <button class="tab-btn" data-tab="table">
+        📋 Audit Table & Explorer
+      </button>
+      <button class="tab-btn" data-tab="diff">
+        ⏱️ Timeline & Diff Engine
+      </button>
+      <button class="tab-btn" data-tab="export">
+        📤 Export & Share
+      </button>
+    </nav>
+
+    <!-- TAB 1: SWIPE DECK VIEW -->
+    <section id="view-swipe" class="tab-view active">
+      <div class="swipe-section">
+        <div id="deckContainer" class="deck-container">
+          <!-- Dynamically populated cards -->
+        </div>
+
+        <!-- Controls -->
+        <div class="swipe-controls">
+          <button class="swipe-circle-btn btn-unfollow-action" onclick="triggerSwipe('unfollow_candidate')" title="Flag as Unfollow Candidate [← / A]">
+            ✕
+          </button>
+          <button class="swipe-circle-btn btn-undo-action" onclick="handleUndo()" title="Undo Last Swipe [U / ⌘Z]">
+            ↩
+          </button>
+          <button class="swipe-circle-btn btn-vip-action" onclick="triggerSwipe('vip')" title="Mark as VIP [↑ / W]">
+            ★
+          </button>
+          <button class="swipe-circle-btn btn-keep-action" onclick="triggerSwipe('whitelist')" title="Keep / Whitelist [→ / D]">
+            ✓
+          </button>
+        </div>
+
+        <!-- Keyboard helper -->
+        <div class="shortcuts-helper">
+          <span><span class="key-badge">←</span> or <span class="key-badge">A</span> Unfollow</span>
+          <span><span class="key-badge">→</span> or <span class="key-badge">D</span> Keep</span>
+          <span><span class="key-badge">↑</span> VIP</span>
+          <span><span class="key-badge">Space</span> Skip</span>
+          <span><span class="key-badge">U</span> Undo</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: AUDIT TABLE VIEW -->
+    <section id="view-table" class="tab-view">
+      <div class="table-toolbar">
+        <div class="search-input-wrap">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="tableSearchInput" class="search-input" placeholder="Search usernames or tags...">
+        </div>
+
+        <div class="filter-pills">
+          <button class="filter-pill active" data-filter="all">All</button>
+          <button class="filter-pill" data-filter="actionable">Actionable (Needs Review)</button>
+          <button class="filter-pill" data-filter="whitelist">Whitelisted (Safe)</button>
+          <button class="filter-pill" data-filter="unfollow_candidate">Flagged for Unfollow</button>
+          <button class="filter-pill" data-filter="mutual">Mutuals</button>
+          <button class="filter-pill" data-filter="fan">Fans</button>
+        </div>
+      </div>
+
+      <!-- Batch Action Bar -->
+      <div id="batchBar" style="display: none; background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: var(--radius-sm); padding: 10px 16px; align-items: center; justify-content: space-between;">
+        <span style="font-size: 0.85rem; font-weight: 600;">
+          Selected: <span id="batchCount">0</span> accounts
+        </span>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-success" onclick="handleBatchAction('whitelist')">✓ Whitelist Selected</button>
+          <button class="btn btn-danger" onclick="handleBatchAction('unfollow_candidate')">✕ Flag Selected for Unfollow</button>
+        </div>
+      </div>
+
+      <!-- Data Table -->
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 36px;"></th>
+              <th>Account</th>
+              <th>Relationship</th>
+              <th>Decision</th>
+              <th>Tags</th>
+              <th>Followed Date</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody">
+            <!-- Populated via JS -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 3: TIMELINE & DIFF VIEW -->
+    <section id="view-diff" class="tab-view">
+      <div class="diff-selectors">
+        <div class="select-group">
+          <label>Baseline Snapshot (Earlier)</label>
+          <select id="diffSnapA"></select>
+        </div>
+        <div class="select-group">
+          <label>Comparison Snapshot (Later)</label>
+          <select id="diffSnapB"></select>
+        </div>
+        <button class="btn btn-primary" onclick="runDiff()">⚡ Compare Snapshots</button>
+      </div>
+
+      <div class="diff-panels-grid">
+        <div class="diff-panel" style="border-top: 3px solid var(--accent-rose);">
+          <div class="diff-panel-header">
+            <div class="diff-panel-title">💔 Lost Followers</div>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Unfollowed you</span>
+          </div>
+          <div id="diffLostFollowers" class="diff-list"></div>
+        </div>
+
+        <div class="diff-panel" style="border-top: 3px solid var(--accent-emerald);">
+          <div class="diff-panel-header">
+            <div class="diff-panel-title">🎉 New Followers</div>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Followed you</span>
+          </div>
+          <div id="diffNewFollowers" class="diff-list"></div>
+        </div>
+
+        <div class="diff-panel" style="border-top: 3px solid var(--accent-amber);">
+          <div class="diff-panel-header">
+            <div class="diff-panel-title">🚪 You Unfollowed</div>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Removed by you</span>
+          </div>
+          <div id="diffUnfollowedByYou" class="diff-list"></div>
+        </div>
+
+        <div class="diff-panel" style="border-top: 3px solid var(--accent-cyan);">
+          <div class="diff-panel-header">
+            <div class="diff-panel-title">➕ You Followed</div>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">New following</span>
+          </div>
+          <div id="diffNewFollowing" class="diff-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: EXPORT & SHARE -->
+    <section id="view-export" class="tab-view">
+      <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 24px; max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px;">
+        <h3>Export Your Follower Audit</h3>
+        <p style="color: var(--text-muted); font-size: 0.88rem; line-height: 1.5;">
+          Download your complete relationship list with custom whitelists, tags, and decisions applied.
+          Use CSV in Excel/Google Sheets, Markdown as a GitHub-ready checklist, or JSON for automated scripts.
+        </p>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 8px;">
+          <a class="btn btn-secondary" href="/api/export?format=csv" download style="justify-content: center;">
+            📊 Download CSV
+          </a>
+          <a class="btn btn-secondary" href="/api/export?format=markdown" download style="justify-content: center;">
+            📝 Download Markdown
+          </a>
+          <a class="btn btn-secondary" href="/api/export?format=json" download style="justify-content: center;">
+            📦 Download JSON
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Upload Modal -->
+  <dialog id="uploadDialog">
+    <div class="modal-header">
+      <h3>Import Instagram Export</h3>
+      <button class="btn btn-secondary btn-icon-only" id="btnCloseUpload">✕</button>
+    </div>
+    <form id="uploadForm">
+      <div class="dropzone" id="dropzone">
+        <div class="dropzone-icon">📁</div>
+        <div style="font-weight: 600;" id="dropzoneText">Drag & drop your export file here</div>
+        <div style="font-size: 0.78rem; color: var(--text-muted);">Supports .zip, .html, or .json archives from Instagram</div>
+        <input type="file" id="uploadFileInput" accept=".zip,.html,.json" style="display: none;">
+      </div>
+
+      <div class="form-group">
+        <label for="snapNameInput">Snapshot Label</label>
+        <input type="text" id="snapNameInput" placeholder="e.g. October 2026 Export">
+      </div>
+
+      <div style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('uploadDialog').close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Process & Audit</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Toast Notifications -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

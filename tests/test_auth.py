@@ -82,3 +82,28 @@ def test_demo_auth_login(auth_client):
     data = res.json()
     assert "access_token" in data
     assert data["user"]["id"] == 1
+
+
+def test_token_expiration_and_invalid_tokens():
+    from datetime import timedelta
+    from fastapi import HTTPException
+    from instagram_analyzer.auth import create_access_token, decode_access_token
+
+    # 1. Expired Token
+    expired_token = create_access_token(user_id=99, email="old@test.com", expires_delta=timedelta(seconds=-10))
+    with pytest.raises(HTTPException) as exc:
+        decode_access_token(expired_token)
+    assert exc.value.status_code == 401
+    assert "expired" in str(exc.value.detail).lower()
+
+    # 2. Corrupted Token
+    with pytest.raises(HTTPException) as exc2:
+        decode_access_token("corrupted.token.signature")
+    assert exc2.value.status_code == 401
+    assert "invalid" in str(exc2.value.detail).lower()
+
+
+def test_auth_route_invalid_token(auth_client):
+    # Pass garbage bearer token to /api/auth/me
+    res = auth_client.get("/api/auth/me", headers={"Authorization": "Bearer bad.token.here"})
+    assert res.status_code == 401

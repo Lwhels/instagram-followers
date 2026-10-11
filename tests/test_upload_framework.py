@@ -73,3 +73,29 @@ def test_async_upload_start_and_polling(upload_env):
     poll_res = client.get(f"/api/uploads/{job_id}", headers=headers)
     assert poll_res.status_code == 200
     assert poll_res.json()["job_id"] == job_id
+
+
+def test_upload_storage_unsupported_format():
+    staging = tempfile.mkdtemp()
+    storage = UploadStorage(base_dir=staging)
+
+    buf = io.BytesIO(b"dummy binary")
+    with pytest.raises(UploadSecurityError) as exc:
+        storage.save_upload_stream(buf, "malware.exe")
+    assert "Unsupported file format" in str(exc.value)
+
+
+def test_upload_storage_zip_bomb_ratio_limit():
+    staging = tempfile.mkdtemp()
+    storage = UploadStorage(base_dir=staging)
+
+    # Create a small compressed file that decompresses into a huge stream of zeroes
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        # 10 MB of zeros compresses to ~10 KB (ratio > 1000x!)
+        z.writestr("huge_zeroes.txt", b"\x00" * (5 * 1024 * 1024))
+    zip_buf.seek(0)
+
+    with pytest.raises(UploadSecurityError) as exc:
+        storage.save_upload_stream(zip_buf, "bomb.zip")
+    assert "decompression ratio" in str(exc.value).lower()

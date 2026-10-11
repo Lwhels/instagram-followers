@@ -122,3 +122,32 @@ def test_parse_zip_archive():
     assert followers[0].username == "follower_alice"
     assert len(following) == 1
     assert following[0].username == "following_bob"
+
+
+def test_parse_file_auto_detection(tmp_path):
+    from instagram_analyzer.parser import parse_file
+
+    # 1. Non-existent file
+    with pytest.raises(FileNotFoundError):
+        parse_file(str(tmp_path / "does_not_exist.html"))
+
+    # 2. JSON file
+    json_path = tmp_path / "followers_1.json"
+    json_path.write_text(json.dumps([{"string_list_data": [{"value": "auto_json_user"}]}]))
+    entries_j = parse_file(str(json_path))
+    assert len(entries_j) == 1
+    assert entries_j[0].username == "auto_json_user"
+
+    # 3. HTML file
+    html_path = tmp_path / "following.html"
+    html_path.write_text('<a href="https://instagram.com/auto_html_user">auto_html_user</a>')
+    entries_h = parse_file(str(html_path))
+    assert len(entries_h) == 1
+    assert entries_h[0].username == "auto_html_user"
+
+    # 4. Plain text file
+    txt_path = tmp_path / "users.txt"
+    txt_path.write_text("plain_user_one\nplain_user_two")
+    entries_t = parse_file(str(txt_path))
+    assert len(entries_t) == 2
+    assert entries_t[0].username == "plain_user_one"

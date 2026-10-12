@@ -20,10 +20,12 @@ def start_backend(port: int):
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 def wait_for_server(url: str, timeout: float = 5.0):
+    if not (url.startswith("http://127.0.0.1:") or url.startswith("http://localhost:")):
+        raise ValueError(f"Refusing to probe non-local server URL: {url}")
     start = time.time()
     while time.time() - start < timeout:
         try:
-            with urlopen(f"{url}/api/status", timeout=0.5) as resp:
+            with urlopen(f"{url}/api/status", timeout=0.5) as resp:  # nosec B310
                 if resp.status == 200:
                     return True
         except Exception:

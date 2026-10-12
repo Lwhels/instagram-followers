@@ -86,11 +86,30 @@ function hashColor(str) {
   return `linear-gradient(135deg, hsl(${h}, 70%, 55%), hsl(${(h + 40) % 360}, 80%, 45%))`;
 }
 
+function escapeHtml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function sanitizeUrl(url) {
+  if (!url) return "#";
+  const str = String(url).trim();
+  if (/^https?:\/\/[a-zA-Z0-9_\-.]+(:\d+)?(\/.*)?$/i.test(str)) {
+    return escapeHtml(str);
+  }
+  return "#";
+}
+
 function showToast(message, icon = "ℹ️") {
   const container = document.getElementById("toastContainer");
   const toast = document.createElement("div");
   toast.className = "toast";
-  toast.innerHTML = `<span>${icon}</span> <span>${message}</span>`;
+  toast.innerHTML = `<span>${escapeHtml(icon)}</span> <span>${escapeHtml(message)}</span>`;
   container.appendChild(toast);
   setTimeout(() => {
     toast.style.opacity = "0";
@@ -284,15 +303,19 @@ function renderDeck() {
     // Header
     const headerRow = document.createElement("div");
     headerRow.className = "card-header-row";
+    const safeUser = escapeHtml(acc.username);
+    const safeProfileUrl = sanitizeUrl(acc.profile_url);
+    const safeFollowedAt = acc.followed_at ? `🗓️ Followed ${escapeHtml(acc.followed_at)}` : "🗓️ Followed date unknown";
+
     headerRow.innerHTML = `
-      <div class="card-avatar" style="background: ${gradient};">${initials}</div>
+      <div class="card-avatar" style="background: ${gradient};">${escapeHtml(initials)}</div>
       <div class="card-titles">
-        <a class="card-username" href="${acc.profile_url}" target="_blank" rel="noopener">
-          @${acc.username}
+        <a class="card-username" href="${safeProfileUrl}" target="_blank" rel="noopener noreferrer">
+          @${safeUser}
           <span style="font-size: 0.75rem; color: #38bdf8;">↗</span>
         </a>
         <div class="card-followed-at">
-          ${acc.followed_at ? `🗓️ Followed ${acc.followed_at}` : "🗓️ Followed date unknown"}
+          ${safeFollowedAt}
         </div>
       </div>
     `;
@@ -303,7 +326,7 @@ function renderDeck() {
 
     const statusChip = document.createElement("div");
     statusChip.className = "status-chip unreciprocated";
-    statusChip.innerHTML = `⚠️ Does Not Follow You Back`;
+    statusChip.textContent = "⚠️ Does Not Follow You Back";
 
     const tagsRow = document.createElement("div");
     tagsRow.className = "tags-row";
@@ -346,7 +369,7 @@ function renderDeck() {
     footerLink.className = "card-footer-link";
     footerLink.innerHTML = `
       <span style="font-size: 0.75rem; color: var(--text-muted);">Swipe or press [← / →]</span>
-      <a class="ig-external-link" href="${acc.profile_url}" target="_blank" rel="noopener">
+      <a class="ig-external-link" href="${safeProfileUrl}" target="_blank" rel="noopener noreferrer">
         View on Instagram ↗
       </a>
     `;
@@ -542,43 +565,51 @@ function renderTable(accounts) {
 
   accounts.forEach(acc => {
     const tr = document.createElement("tr");
+    const safeUser = escapeHtml(acc.username);
+    const safeUrl = sanitizeUrl(acc.profile_url);
+    const safeRel = escapeHtml(acc.relationship);
+    const safeDec = escapeHtml(acc.decision);
+    const safeFollowed = escapeHtml(acc.followed_at || "-");
     const isChecked = state.selectedUsernames.has(acc.username);
+    const tagsHtml = acc.tags && acc.tags.length > 0
+      ? acc.tags.map(t => `<span class="tag-badge">#${escapeHtml(t)}</span>`).join(" ")
+      : "-";
 
     tr.innerHTML = `
       <td>
-        <input type="checkbox" class="row-checkbox" data-username="${acc.username}" ${isChecked ? "checked" : ""}>
+        <input type="checkbox" class="row-checkbox" data-username="${safeUser}" ${isChecked ? "checked" : ""}>
       </td>
       <td>
         <div class="account-cell">
-          <div class="mini-avatar" style="background: ${hashColor(acc.username)}">${acc.username.slice(0, 2).toUpperCase()}</div>
+          <div class="mini-avatar" style="background: ${hashColor(acc.username)}">${escapeHtml(acc.username.slice(0, 2).toUpperCase())}</div>
           <div>
-            <a href="${acc.profile_url}" target="_blank" rel="noopener" style="color: var(--text-main); font-weight: 600; text-decoration: none;">
-              @${acc.username}
+            <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" style="color: var(--text-main); font-weight: 600; text-decoration: none;">
+              @${safeUser}
             </a>
           </div>
         </div>
       </td>
       <td>
-        <span class="status-chip ${acc.relationship}">
-          ${acc.relationship}
+        <span class="status-chip ${safeRel}">
+          ${safeRel}
         </span>
       </td>
       <td>
-        <span class="tag-badge ${acc.decision}">
-          ${acc.decision}
+        <span class="tag-badge ${safeDec}">
+          ${safeDec}
         </span>
       </td>
       <td>
-        ${acc.tags && acc.tags.length > 0 ? acc.tags.map(t => `<span class="tag-badge">#${t}</span>`).join(" ") : "-"}
+        ${tagsHtml}
       </td>
       <td style="color: var(--text-muted); font-size: 0.8rem;">
-        ${acc.followed_at || "-"}
+        ${safeFollowed}
       </td>
       <td>
         <div class="table-actions">
-          <button class="table-action-btn" onclick="quickDecide('${acc.username}', 'whitelist')">✓ Keep</button>
-          <button class="table-action-btn" onclick="quickDecide('${acc.username}', 'unfollow_candidate')">✕ Flag</button>
-          <a class="table-action-btn" href="${acc.profile_url}" target="_blank" rel="noopener">↗ IG</a>
+          <button class="table-action-btn btn-quick-keep" data-username="${safeUser}">✓ Keep</button>
+          <button class="table-action-btn btn-quick-flag" data-username="${safeUser}">✕ Flag</button>
+          <a class="table-action-btn" href="${safeUrl}" target="_blank" rel="noopener noreferrer">↗ IG</a>
         </div>
       </td>
     `;
@@ -591,6 +622,18 @@ function renderTable(accounts) {
       if (e.target.checked) state.selectedUsernames.add(u);
       else state.selectedUsernames.delete(u);
       updateBatchBar();
+    });
+  });
+
+  tbody.querySelectorAll(".btn-quick-keep").forEach(btn => {
+    btn.addEventListener("click", () => {
+      quickDecide(btn.dataset.username, "whitelist");
+    });
+  });
+
+  tbody.querySelectorAll(".btn-quick-flag").forEach(btn => {
+    btn.addEventListener("click", () => {
+      quickDecide(btn.dataset.username, "unfollow_candidate");
     });
   });
 }
@@ -642,8 +685,15 @@ async function loadDiffView() {
   selB.innerHTML = "";
 
   snaps.forEach(s => {
-    selA.innerHTML += `<option value="${s.id}">${s.name} (${s.created_at.slice(0, 10)})</option>`;
-    selB.innerHTML += `<option value="${s.id}">${s.name} (${s.created_at.slice(0, 10)})</option>`;
+    const optA = document.createElement("option");
+    optA.value = s.id;
+    optA.textContent = `${s.name} (${s.created_at.slice(0, 10)})`;
+    selA.appendChild(optA);
+
+    const optB = document.createElement("option");
+    optB.value = s.id;
+    optB.textContent = `${s.name} (${s.created_at.slice(0, 10)})`;
+    selB.appendChild(optB);
   });
 
   if (snaps.length > 1) {
@@ -656,7 +706,7 @@ async function runDiff() {
   const idB = document.getElementById("diffSnapB").value;
   if (!idA || !idB) return;
 
-  const res = await apiFetch(`/api/snapshots/diff?snapshot_a_id=${idA}&snapshot_b_id=${idB}`, { method: "POST" });
+  const res = await apiFetch(`/api/snapshots/diff?snapshot_a_id=${encodeURIComponent(idA)}&snapshot_b_id=${encodeURIComponent(idB)}`, { method: "POST" });
   const data = await res.json();
 
   renderDiffList("diffLostFollowers", data.lost_followers);
@@ -675,9 +725,11 @@ function renderDiffList(elementId, items) {
   items.forEach(a => {
     const item = document.createElement("div");
     item.className = "diff-list-item";
+    const safeUser = escapeHtml(a.username);
+    const safeUrl = sanitizeUrl(a.profile_url);
     item.innerHTML = `
-      <span>@${a.username}</span>
-      <a class="table-action-btn" href="${a.profile_url}" target="_blank" rel="noopener">↗</a>
+      <span>@${safeUser}</span>
+      <a class="table-action-btn" href="${safeUrl}" target="_blank" rel="noopener noreferrer">↗</a>
     `;
     el.appendChild(item);
   });
@@ -716,10 +768,11 @@ function renderAuthHeader() {
   if (state.currentUser) {
     const email = state.currentUser.email;
     const initial = email.charAt(0).toUpperCase();
+    const safeName = escapeHtml(state.currentUser.display_name || email);
     container.innerHTML = `
       <div class="user-pill">
-        <div class="user-pill-avatar">${initial}</div>
-        <span>${state.currentUser.display_name || email}</span>
+        <div class="user-pill-avatar">${escapeHtml(initial)}</div>
+        <span>${safeName}</span>
       </div>
       <button class="btn btn-secondary btn-icon-only" id="btnLogout" title="Sign Out">
         🚪

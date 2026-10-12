@@ -63,16 +63,16 @@ class AuditMetrics(BaseModel):
 
 
 class SwipeAction(BaseModel):
-    username: str
+    username: str = Field(..., min_length=1, max_length=60)
     decision: DecisionType
-    tags: Optional[List[str]] = None
-    notes: Optional[str] = None
+    tags: Optional[List[str]] = Field(None, max_length=50)
+    notes: Optional[str] = Field(None, max_length=1000)
 
 
 class BatchDecisionRequest(BaseModel):
-    usernames: List[str]
+    usernames: List[str] = Field(..., min_length=1, max_length=5000)
     decision: DecisionType
-    tags: Optional[List[str]] = None
+    tags: Optional[List[str]] = Field(None, max_length=50)
 
 
 class DiffResult(BaseModel):
@@ -88,14 +88,19 @@ class DiffResult(BaseModel):
 
 # Authentication & Multi-Tenancy Models
 class UserRegisterRequest(BaseModel):
-    email: str
-    password: str
-    display_name: Optional[str] = None
+    email: str = Field(
+        ...,
+        min_length=3,
+        max_length=255,
+        pattern=r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$",
+    )
+    password: str = Field(..., min_length=6, max_length=128)
+    display_name: Optional[str] = Field(None, max_length=100)
 
 
 class UserLoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class UploadJobStatus(str, Enum):

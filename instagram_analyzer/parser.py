@@ -12,11 +12,10 @@ from bs4 import BeautifulSoup
 
 class ParsedEntry:
     def __init__(self, username: str, profile_url: str = "", timestamp_str: Optional[str] = None):
-        # Clean username: remove leading/trailing @ or whitespace
-        cleaned = username.strip().lstrip("@")
-        self.username = cleaned.lower()
-        self.profile_url = profile_url.strip() if profile_url else f"https://www.instagram.com/{self.username}"
-        self.timestamp_str = timestamp_str
+        cleaned = _clean_username(username)
+        self.username = cleaned
+        self.profile_url = f"https://www.instagram.com/{cleaned}" if cleaned else "https://www.instagram.com"
+        self.timestamp_str = str(timestamp_str)[:64] if timestamp_str else None
 
     def __hash__(self):
         return hash(self.username)
@@ -33,13 +32,19 @@ class ParsedEntry:
 
 
 def _clean_username(raw: str) -> str:
-    """Extract clean username from string or URL."""
+    """Extract and validate clean username from string or URL."""
+    if not raw:
+        return ""
     raw = raw.strip()
     if "/" in raw:
-        match = re.search(r"instagram\.com/(?:_u/)?([a-zA-Z0-9_.]+)", raw)
+        match = re.search(r"instagram\.com/(?:_u/)?([a-zA-Z0-9_.]{1,30})", raw)
         if match:
-            return match.group(1).lower()
-    return raw.lstrip("@").strip().lower()
+            u = match.group(1).lower().strip(".")
+            return u if re.match(r"^[a-zA-Z0-9_.]{1,30}$", u) else ""
+    cleaned = raw.lstrip("@").strip().lower().strip(".")
+    if re.match(r"^[a-zA-Z0-9_.]{1,30}$", cleaned):
+        return cleaned
+    return ""
 
 
 def parse_html_content(html_content: str) -> List[ParsedEntry]:
@@ -193,7 +198,11 @@ def parse_zip_archive(zip_bytes_or_path) -> Tuple[List[ParsedEntry], List[Parsed
             if re.search(r"^following.*?\.(html|json)$", os.path.basename(n), re.I)
         ]
 
+        MAX_MEMBER_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
         for fname in follower_files:
+            info = z.getinfo(fname)
+            if info.file_size > MAX_MEMBER_SIZE_BYTES:
+                continue
             content = z.read(fname).decode("utf-8", errors="ignore")
             if fname.lower().endswith(".json"):
                 followers.extend(parse_json_content(content))
@@ -201,6 +210,9 @@ def parse_zip_archive(zip_bytes_or_path) -> Tuple[List[ParsedEntry], List[Parsed
                 followers.extend(parse_html_content(content))
 
         for fname in following_files:
+            info = z.getinfo(fname)
+            if info.file_size > MAX_MEMBER_SIZE_BYTES:
+                continue
             content = z.read(fname).decode("utf-8", errors="ignore")
             if fname.lower().endswith(".json"):
                 following.extend(parse_json_content(content))

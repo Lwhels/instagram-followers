@@ -60,16 +60,30 @@ class UploadStorage:
         return file_id, safe_path
 
     def _validate_zip_archive(self, zip_path: str, compressed_size: int):
-        """Validate zip integrity and guard against Zip Slip and Zip Bombs."""
+        """Validate zip integrity and guard against Zip Slip, symlink attacks, and Zip Bombs."""
+        MAX_ZIP_ENTRIES = 10_000
+        MAX_TOTAL_UNCOMPRESSED = 500 * 1024 * 1024  # 500 MB
         with zipfile.ZipFile(zip_path, "r") as z:
+            infolist = z.infolist()
+            if len(infolist) > MAX_ZIP_ENTRIES:
+                raise UploadSecurityError(f"Archive member count ({len(infolist)}) exceeds maximum safety limit ({MAX_ZIP_ENTRIES})")
+
             total_uncompressed = 0
-            for info in z.infolist():
-                # Zip Slip path traversal check
-                filename = info.filename
-                if os.path.isabs(filename) or ".." in filename.split("/"):
-                    raise UploadSecurityError(f"Malicious archive member detected: {filename}")
+            for info in infolist:
+                # Zip Slip path traversal check (handling both / and \ separators)
+                norm_name = info.filename.replace("\\", "/")
+                parts = [p for p in norm_name.split("/") if p]
+                if norm_name.startswith("/") or ".." in parts:
+                    raise UploadSecurityError(f"Malicious archive member detected: {info.filename}")
+
+                # Reject symlinks (mode & 0o120000 == 0o120000)
+                if (info.external_attr >> 16) & 0o120000 == 0o120000:
+                    raise UploadSecurityError(f"Symlinks are disallowed inside archive: {info.filename}")
 
                 total_uncompressed += info.file_size
+                if total_uncompressed > MAX_TOTAL_UNCOMPRESSED:
+                    raise UploadSecurityError(f"Archive total uncompressed size exceeds maximum safety limit ({MAX_TOTAL_UNCOMPRESSED // (1024*1024)}MB)")
+
                 if total_uncompressed > compressed_size * MAX_DECOMPRESSED_RATIO:
                     raise UploadSecurityError("Archive decompression ratio exceeded safety limits (potential zip bomb)")
 

@@ -12,7 +12,15 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
 
 # Secret key for JWT signing; in production, set via JWT_SECRET environment variable
-JWT_SECRET = os.getenv("JWT_SECRET", "follower-vault-super-secure-production-secret-key-3849102")
+_raw_secret = os.getenv("JWT_SECRET")
+if not _raw_secret:
+    if os.getenv("ENV") == "production":
+        raise RuntimeError("CRITICAL SECURITY ERROR: JWT_SECRET environment variable must be set in production mode!")
+    import secrets
+    JWT_SECRET = secrets.token_hex(32)
+else:
+    JWT_SECRET = _raw_secret
+
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 

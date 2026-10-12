@@ -41,7 +41,10 @@ class Database:
             "user_decisions": "user_id INTEGER NOT NULL DEFAULT 1",
             "decision_history": "user_id INTEGER NOT NULL DEFAULT 1",
         }
+        allowed_tables = {"user_accounts", "snapshot_relations", "user_decisions", "decision_history"}
         for table, col_def in tables_to_check.items():
+            if table not in allowed_tables:
+                continue
             # Check if table exists
             table_exists = conn.execute(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
@@ -49,11 +52,11 @@ class Database:
             ).fetchone()[0]
             if table_exists:
                 columns = [
-                    row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                    row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()  # nosec B608
                 ]
                 col_name = col_def.split()[0]
-                if col_name not in columns:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+                if col_name not in columns and re.match(r"^[a-zA-Z0-9_ ]+$", col_def):
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")  # nosec B608
 
     def _init_db(self):
         with self._get_connection() as conn:
@@ -239,11 +242,12 @@ class Database:
             updates.append("processed_items = ?")
             params.append(processed_items)
 
-        if not updates:
+        allowed_setters = {"status = ?", "stage = ?", "progress_percent = ?", "total_items = ?", "processed_items = ?"}
+        if not updates or not all(u in allowed_setters for u in updates):
             return
 
         params.append(job_id)
-        sql = f"UPDATE upload_jobs SET {', '.join(updates)} WHERE id = ?"
+        sql = f"UPDATE upload_jobs SET {', '.join(updates)} WHERE id = ?"  # nosec B608
         with self._get_connection() as conn:
             conn.execute(sql, params)
             conn.commit()
@@ -565,8 +569,15 @@ class Database:
             params.append(decision.value)
 
         if search:
-            conditions.append("sr.username LIKE ?")
-            params.append(f"%{search.strip().lower()}%")
+            escaped_search = (
+                search.strip()
+                .lower()
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            conditions.append("sr.username LIKE ? ESCAPE '\\'")
+            params.append(f"%{escaped_search}%")
 
         where_clause = " AND ".join(conditions)
         sql = f"""
@@ -595,7 +606,7 @@ class Database:
                 END,
                 sr.username ASC
             LIMIT ? OFFSET ?
-        """
+        """  # nosec B608
         params.extend([limit, offset])
 
         with self._get_connection() as conn:

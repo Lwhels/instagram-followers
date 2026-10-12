@@ -59,13 +59,34 @@ def create_app(db_path: Optional[str] = None, upload_dir: Optional[str] = None) 
         version="2.1.0",
     )
 
+    allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000")
+    allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+    allow_creds = False if "*" in allowed_origins else True
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
+        allow_origins=allowed_origins,
+        allow_credentials=allow_creds,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def add_security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' https:;"
+        )
+        return response
 
     resolved_db_path = db_path or os.getenv("DATABASE_PATH", os.getenv("DATABASE_URL", "follower_vault.db"))
     resolved_upload_dir = upload_dir or os.getenv("UPLOAD_DIR", "uploads_staging")
@@ -336,45 +357,45 @@ def create_app(db_path: Optional[str] = None, upload_dir: Optional[str] = None) 
         zip_file: Optional[UploadFile] = File(None),
         user: dict = Depends(get_current_user),
     ):
-        """Synchronous upload fallback for simple direct imports."""
         user_id = user["id"]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            zip_path = None
-            f_path = None
-            fg_path = None
+        staged_files = []
+        zip_path = None
+        f_path = None
+        fg_path = None
 
+        try:
             if zip_file and zip_file.filename:
-                zip_path = os.path.join(tmpdir, zip_file.filename)
-                with open(zip_path, "wb") as f:
-                    shutil.copyfileobj(zip_file.file, f)
+                _, zip_path = storage.save_upload_stream(zip_file.file, zip_file.filename)
+                staged_files.append(zip_path)
             else:
                 if followers_file and followers_file.filename:
-                    f_path = os.path.join(tmpdir, followers_file.filename)
-                    with open(f_path, "wb") as f:
-                        shutil.copyfileobj(followers_file.file, f)
-
+                    _, f_path = storage.save_upload_stream(followers_file.file, followers_file.filename)
+                    staged_files.append(f_path)
                 if following_file and following_file.filename:
-                    fg_path = os.path.join(tmpdir, following_file.filename)
-                    with open(fg_path, "wb") as f:
-                        shutil.copyfileobj(following_file.file, f)
+                    _, fg_path = storage.save_upload_stream(following_file.file, following_file.filename)
+                    staged_files.append(fg_path)
 
-            try:
-                snap_id = engine.ingest_files(
-                    snapshot_name=snapshot_name,
-                    followers_file=f_path,
-                    following_file=fg_path,
-                    zip_file=zip_path,
-                    user_id=user_id,
-                )
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Failed to parse files: {str(e)}")
+            snap_id = engine.ingest_files(
+                snapshot_name=snapshot_name,
+                followers_file=f_path,
+                following_file=fg_path,
+                zip_file=zip_path,
+                user_id=user_id,
+            )
+        except UploadSecurityError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse files: {str(e)}")
+        finally:
+            for p in staged_files:
+                storage.cleanup(p)
 
-            metrics = engine.recompute(snapshot_id=snap_id, user_id=user_id)
-            return {
-                "success": True,
-                "snapshot_id": snap_id,
-                "metrics": metrics,
-            }
+        metrics = engine.recompute(snapshot_id=snap_id, user_id=user_id)
+        return {
+            "success": True,
+            "snapshot_id": snap_id,
+            "metrics": metrics,
+        }
 
     @app.get("/api/export")
     def get_export(

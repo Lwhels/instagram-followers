@@ -53,7 +53,7 @@ def test_register_and_login_flow(auth_client):
         "email": "john@example.com",
         "password": "123",
     })
-    assert short_res.status_code == 400
+    assert short_res.status_code in {400, 422}
 
     # 4. Login with wrong password
     wrong_res = auth_client.post("/api/auth/login", json={

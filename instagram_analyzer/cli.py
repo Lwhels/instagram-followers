@@ -105,7 +105,7 @@ def main():
 
     # Serve
     p_serve = subparsers.add_parser("serve", help="Launch interactive web & desktop UI")
-    p_serve.add_argument("--host", default=os.getenv("HOST", "0.0.0.0"), help="Host to bind")
+    p_serve.add_argument("--host", default=os.getenv("HOST", "127.0.0.1"), help="Host to bind (default: 127.0.0.1)")
     p_serve.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")), help="Port to bind")
     p_serve.add_argument("--reload", action="store_true", help="Auto reload")
     p_serve.add_argument("--db", default="follower_vault.db", help="Path to SQLite database")

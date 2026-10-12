@@ -89,8 +89,8 @@ def generate_sample_dataset() -> Tuple[List[ParsedEntry], List[ParsedEntry]]:
         ts = (base_time - timedelta(days=i * 4, hours=i % 24)).strftime("%b %d, %Y %I:%M %p")
         followers.append(ParsedEntry(username=uname, timestamp_str=ts))
 
-    # Shuffle for realistic ordering
-    rng = random.Random(42)
+    # Shuffle for realistic ordering (deterministic mock data generation only, not for crypto)
+    rng = random.Random(42)  # nosec B311
     rng.shuffle(followers)
     rng.shuffle(following)
 

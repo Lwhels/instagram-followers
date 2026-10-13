@@ -58,6 +58,13 @@ class Database:
                 if col_name not in columns and re.match(r"^[a-zA-Z0-9_ ]+$", col_def):
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")  # nosec B608
 
+        # Ensure unique index exists on user_decisions for UPSERT (ON CONFLICT) compatibility
+        table_exists = conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='user_decisions'",
+        ).fetchone()[0]
+        if table_exists:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_user_name ON user_decisions(user_id, username);")
+
     def _init_db(self):
         with self._get_connection() as conn:
             # 1. First create tables that may not exist
@@ -329,8 +336,23 @@ class Database:
             )
             snapshot_id = cursor.lastrowid
 
+            has_legacy_users = cursor.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='users'"
+            ).fetchone()[0] > 0
+
             for uname in all_usernames:
                 entry = following_map.get(uname) or follower_map.get(uname)
+                if has_legacy_users:
+                    cursor.execute(
+                        """
+                        INSERT INTO users (username, display_name, profile_url, first_seen, last_seen)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(username) DO UPDATE SET
+                            profile_url = excluded.profile_url,
+                            last_seen = excluded.last_seen
+                        """,
+                        (uname, None, entry.profile_url, now, now),
+                    )
                 cursor.execute(
                     """
                     INSERT INTO user_accounts (user_id, username, display_name, profile_url, first_seen, last_seen)
